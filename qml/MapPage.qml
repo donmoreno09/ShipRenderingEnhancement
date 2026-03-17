@@ -28,13 +28,36 @@ Item {
         plugin: Plugin {
             name: "osm"
             PluginParameter { name: "osm.mapping.providersrepository.disabled"; value: true }
-            PluginParameter { name: "osm.mapping.custom.host";                  value: "https://tile.openstreetmap.org/" }
+            PluginParameter { name: "osm.mapping.custom.host";                  value: "https://a.basemaps.cartocdn.com/dark_all/" }
         }
 
         center: QtPositioning.coordinate(44.0, 8.5)   // Ligurian Sea
         zoomLevel: 8
         minimumZoomLevel: 5
         maximumZoomLevel: 18
+
+        // ── Pan & scroll interaction ──────────────────────────────────────────
+        WheelHandler {
+            id: wheel
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            onWheel: (event) => {
+                const delta = event.angleDelta.y / 120
+                map.zoomLevel = Math.min(map.maximumZoomLevel,
+                                Math.max(map.minimumZoomLevel,
+                                         map.zoomLevel + delta * 0.5))
+            }
+        }
+
+        DragHandler {
+            id: drag
+            target: null
+            property point lastTranslation: Qt.point(0, 0)
+            onActiveChanged: if (active) lastTranslation = Qt.point(0, 0)
+            onTranslationChanged: {
+                map.pan(lastTranslation.x - translation.x, lastTranslation.y - translation.y)
+                lastTranslation = translation
+            }
+        }
 
         // ── Vessel delegates ─────────────────────────────────────────────────
         MapItemView {
@@ -56,78 +79,90 @@ Item {
                 required property string name
                 required property double speed
 
-                // Geo anchor — the GPS coordinate is the antenna position
                 coordinate: QtPositioning.coordinate(lat, lon)
 
                 // ── Zoom threshold ───────────────────────────────────────────
                 readonly property bool highZoom: map.zoomLevel >= 14
 
                 // ── Ship pixel dimensions at current zoom ────────────────────
-                // map.metersPerPixel converts real-world metres → screen pixels
-                readonly property real pxLength: shipLength / map.metersPerPixel
-                readonly property real pxWidth:  shipWidth  / map.metersPerPixel
+                readonly property real safeMpp:  map.metersPerPixel > 0 ? map.metersPerPixel : 1.0
+                readonly property real pxLength: Math.max(shipLength / safeMpp, 40)
+                readonly property real pxWidth:  Math.max(shipWidth  / safeMpp, 35)
 
-                // ── Anchor offset compensation ───────────────────────────────
-                // At high zoom: anchor the image so the antenna point (B from
-                // stern = B/(A+B) from the top of the image when heading = 0°)
-                // sits exactly on the coordinate.
-                // At low zoom: centre the 57×57 icon on the coordinate.
+                // ── Antenna pixel position inside the ship image (unrotated) ─
+                // antX = C/(C+D) × width  → distance from port edge to antenna
+                // antY = A/(A+B) × height → distance from bow edge to antenna
+                readonly property real antX: hasDimensions
+                    ? pxWidth  * (c / Math.max(shipWidth,  1))
+                    : pxWidth  / 2
+                readonly property real antY: hasDimensions
+                    ? pxLength * (a / Math.max(shipLength, 1))
+                    : pxLength / 2
+
+                // ── Container half-size ──────────────────────────────────────
+                // The sourceItem is a square of (halfDiag × 2). The ship image
+                // is placed inside it so the antenna lands at the exact centre
+                // (halfDiag, halfDiag). Any heading rotation then pivots the
+                // ship around that centre, keeping the GPS dot locked in place.
+                readonly property real halfDiag: Math.ceil(
+                    Math.sqrt(pxLength * pxLength + pxWidth * pxWidth))
+
+                // anchorPoint always points to the centre of the sourceItem,
+                // which is where the antenna is mapped.
                 anchorPoint {
-                    x: highZoom && hasDimensions
-                        ? (pxWidth  * (c / Math.max(shipWidth,  1)))
-                        : 57 / 2
-                    y: highZoom && hasDimensions
-                        ? (pxLength * (a / Math.max(shipLength, 1)))
-                        : 57 / 2
+                    x: highZoom ? halfDiag : 57 / 2
+                    y: highZoom ? halfDiag : 57 / 2
                 }
 
                 sourceItem: Item {
-                    width:  vesselItem.highZoom && vesselItem.hasDimensions ? vesselItem.pxWidth  : 57
-                    height: vesselItem.highZoom && vesselItem.hasDimensions ? vesselItem.pxLength : 57
+                    width:  vesselItem.highZoom ? vesselItem.halfDiag * 2 : 57
+                    height: vesselItem.highZoom ? vesselItem.halfDiag * 2 : 57
 
                     // ── Low-zoom icon ─────────────────────────────────────────
                     Image {
                         id: pinIcon
                         anchors.fill: parent
-                        source: "qrc:/assets/Map_pin.svg"
+                        source: "../assets/Map_pin.svg"
                         fillMode: Image.PreserveAspectFit
                         smooth: true
-                        visible: !vesselItem.highZoom || !vesselItem.hasDimensions
-
+                        visible: !vesselItem.highZoom
                         rotation: vesselItem.displayHeading
-
                         Behavior on rotation {
                             RotationAnimation { duration: 300; direction: RotationAnimation.Shortest }
                         }
                     }
 
                     // ── High-zoom ship silhouette ─────────────────────────────
+                    // Offset so antenna (antX, antY) sits at (halfDiag, halfDiag).
+                    // Rotation pivots around (antX, antY) in image-local coords,
+                    // which is exactly the centre of the sourceItem — so the GPS
+                    // pin never moves regardless of heading.
                     Image {
                         id: shipShape
-                        anchors.fill: parent
-                        source: "qrc:/assets/level-02.svg"
-                        fillMode: Image.Stretch          // respect exact A/B/C/D proportions
+                        x: vesselItem.halfDiag - vesselItem.antX
+                        y: vesselItem.halfDiag - vesselItem.antY
+                        width:  vesselItem.pxWidth
+                        height: vesselItem.pxLength
+                        source: "../assets/level-02.svg"
+                        fillMode: vesselItem.hasDimensions ? Image.Stretch : Image.PreserveAspectFit
                         smooth: true
-                        visible: vesselItem.highZoom && vesselItem.hasDimensions
-
-                        rotation: vesselItem.displayHeading
-
-                        Behavior on rotation {
-                            RotationAnimation { duration: 300; direction: RotationAnimation.Shortest }
+                        visible: vesselItem.highZoom
+                        transform: Rotation {
+                            angle:    vesselItem.displayHeading
+                            origin.x: vesselItem.antX
+                            origin.y: vesselItem.antY
                         }
                     }
 
                     // ── Vessel label (high zoom only) ─────────────────────────
                     Rectangle {
                         visible: vesselItem.highZoom
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        anchors.top: parent.bottom
-                        anchors.topMargin: 4
+                        x: vesselItem.halfDiag - width / 2
+                        y: vesselItem.halfDiag + 20
                         color: "#CC0d1117"
                         radius: 4
                         width: nameLabel.implicitWidth + 10
                         height: nameLabel.implicitHeight + 4
-
                         Text {
                             id: nameLabel
                             anchors.centerIn: parent

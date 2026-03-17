@@ -73,6 +73,26 @@ public:
         shipType       = obj["ship_type"].toInt();
         navstat        = obj["navstat"].toInt();
     }
+
+    // Populates from the simulator's AIS object (uppercase field names).
+    // displayHeading is resolved here: falls back to cog when heading == 511.
+    void fromAIS(const QJsonObject& ais)
+    {
+        mmsi    = ais["MMSI"].toInt();
+        name    = ais["NAME"].toString();
+        lat     = ais["LATITUDE"].toDouble();
+        lon     = ais["LONGITUDE"].toDouble();
+        heading = ais["HEADING"].toInt();
+        cog     = ais["COURSE"].toDouble();
+        displayHeading = (heading == 511) ? cog : static_cast<double>(heading);
+        speed   = ais["SPEED"].toDouble();
+        a       = ais["A"].toInt();
+        b       = ais["B"].toInt();
+        c       = ais["C"].toInt();
+        d       = ais["D"].toInt();
+        shipType = ais["TYPE"].toInt();
+        navstat  = ais["NAVSTAT"].toInt();
+    }
 };
 
 #endif // VESSEL_H

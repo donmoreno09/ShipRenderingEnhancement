@@ -7,8 +7,10 @@
 #include "entities/Vessel.h"
 
 // ─── VesselApi ────────────────────────────────────────────────────────────────
-// Responsible for a single REST call: GET /vessels
-// Returns the flat list of Vessel domain objects via callback.
+// Fetches vessels from the simulator in two steps:
+//   1. POST /simulation           → obtain a simulationId
+//   2. GET  /simulation/:id/vessels → fetch the AIS vessel array
+// Returns the parsed Vessel list via callback.
 
 class VesselApi : public BaseApi
 {
