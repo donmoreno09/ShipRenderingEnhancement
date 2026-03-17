@@ -29,6 +29,7 @@ Item {
             name: "osm"
             PluginParameter { name: "osm.mapping.providersrepository.disabled"; value: true }
             PluginParameter { name: "osm.mapping.custom.host";                  value: "https://a.basemaps.cartocdn.com/dark_all/" }
+            PluginParameter { name: "osm.mapping.custom.map_type";              value: "Street Map" }
         }
 
         center: QtPositioning.coordinate(44.0, 8.5)   // Ligurian Sea
