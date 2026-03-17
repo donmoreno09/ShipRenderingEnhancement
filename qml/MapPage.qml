@@ -28,8 +28,7 @@ Item {
         plugin: Plugin {
             name: "osm"
             PluginParameter { name: "osm.mapping.providersrepository.disabled"; value: true }
-            PluginParameter { name: "osm.mapping.custom.host";                  value: "https://a.basemaps.cartocdn.com/dark_all/" }
-            PluginParameter { name: "osm.mapping.custom.map_type";              value: "Street Map" }
+            PluginParameter { name: "osm.mapping.custom.host";                  value: "https://tile.openstreetmap.org/" }
         }
 
         center: QtPositioning.coordinate(44.0, 8.5)   // Ligurian Sea
@@ -82,17 +81,38 @@ Item {
 
                 coordinate: QtPositioning.coordinate(lat, lon)
 
-                // ── Zoom threshold ───────────────────────────────────────────
-                readonly property bool highZoom: map.zoomLevel >= 14
+                // ── Zoom zones ───────────────────────────────────────────────
+                //   < 11  → pin icon only
+                //   ≥ 11  → ship silhouette, grows continuously with zoom
+                //   ≥ 14  → label also visible
+                readonly property bool showShape: map.zoomLevel >= 11
+                readonly property bool showLabel: map.zoomLevel >= 14
 
-                // ── Ship pixel dimensions at current zoom ────────────────────
-                readonly property real safeMpp:  map.metersPerPixel > 0 ? map.metersPerPixel : 1.0
-                readonly property real pxLength: Math.max(shipLength / safeMpp, 40)
-                readonly property real pxWidth:  Math.max(shipWidth  / safeMpp, 35)
+                // ── Continuous size: zoom-level formula ──────────────────────
+                // Avoids dependence on map.metersPerPixel (unreliable during
+                // tile provider changes / map init).
+                //
+                // zoomScale doubles every zoom step — physically accurate since
+                // metersPerPixel also halves every step.
+                // Reference: a 200 m ship ≈ 20 px at zoom 14 (Mediterranean).
+                //
+                // Minimum grows with zoom so ships are always a visible shape.
+                // Maximum clamps bad AIS data (A/B up to 511 in the spec).
+                readonly property real zoomScale: Math.pow(2, map.zoomLevel - 14)
 
-                // ── Antenna pixel position inside the ship image (unrotated) ─
-                // antX = C/(C+D) × width  → distance from port edge to antenna
-                // antY = A/(A+B) × height → distance from bow edge to antenna
+                readonly property real rawPxLength: hasDimensions
+                    ? Math.min(shipLength, 500) * zoomScale / 10.0 : 0
+                readonly property real rawPxWidth: hasDimensions
+                    ? Math.min(shipWidth,  80)  * zoomScale / 10.0 : 0
+
+                readonly property real zf:         Math.max(map.zoomLevel - 10, 0)
+                readonly property real minPxLength: 4 + zf * 2
+                readonly property real minPxWidth:  2 + zf * 0.8
+
+                readonly property real pxLength: Math.min(Math.max(rawPxLength, minPxLength), 300)
+                readonly property real pxWidth:  Math.min(Math.max(rawPxWidth,  minPxWidth),  60)
+
+                // ── Antenna position inside the ship image ────────────────────
                 readonly property real antX: hasDimensions
                     ? pxWidth  * (c / Math.max(shipWidth,  1))
                     : pxWidth  / 2
@@ -100,44 +120,38 @@ Item {
                     ? pxLength * (a / Math.max(shipLength, 1))
                     : pxLength / 2
 
-                // ── Container half-size ──────────────────────────────────────
-                // The sourceItem is a square of (halfDiag × 2). The ship image
-                // is placed inside it so the antenna lands at the exact centre
-                // (halfDiag, halfDiag). Any heading rotation then pivots the
-                // ship around that centre, keeping the GPS dot locked in place.
+                // sourceItem is a square large enough for any rotation
                 readonly property real halfDiag: Math.ceil(
                     Math.sqrt(pxLength * pxLength + pxWidth * pxWidth))
 
-                // anchorPoint always points to the centre of the sourceItem,
-                // which is where the antenna is mapped.
+                // anchorPoint = centre of sourceItem = antenna GPS position
                 anchorPoint {
-                    x: highZoom ? halfDiag : 57 / 2
-                    y: highZoom ? halfDiag : 57 / 2
+                    x: showShape ? halfDiag : 57 / 2
+                    y: showShape ? halfDiag : 57 / 2
                 }
 
                 sourceItem: Item {
-                    width:  vesselItem.highZoom ? vesselItem.halfDiag * 2 : 57
-                    height: vesselItem.highZoom ? vesselItem.halfDiag * 2 : 57
+                    width:  vesselItem.showShape ? vesselItem.halfDiag * 2 : 57
+                    height: vesselItem.showShape ? vesselItem.halfDiag * 2 : 57
 
-                    // ── Low-zoom icon ─────────────────────────────────────────
+                    // ── Pin icon (low zoom) ───────────────────────────────────
                     Image {
                         id: pinIcon
                         anchors.fill: parent
                         source: "../assets/Map_pin.svg"
                         fillMode: Image.PreserveAspectFit
                         smooth: true
-                        visible: !vesselItem.highZoom
+                        visible: !vesselItem.showShape
                         rotation: vesselItem.displayHeading
                         Behavior on rotation {
                             RotationAnimation { duration: 300; direction: RotationAnimation.Shortest }
                         }
                     }
 
-                    // ── High-zoom ship silhouette ─────────────────────────────
-                    // Offset so antenna (antX, antY) sits at (halfDiag, halfDiag).
-                    // Rotation pivots around (antX, antY) in image-local coords,
-                    // which is exactly the centre of the sourceItem — so the GPS
-                    // pin never moves regardless of heading.
+                    // ── Ship silhouette (zoom ≥ 11) ───────────────────────────
+                    // Offset so the antenna (antX, antY) lands at the centre of
+                    // the sourceItem. Rotation pivots around that same point,
+                    // keeping the GPS dot locked on the coordinate.
                     Image {
                         id: shipShape
                         x: vesselItem.halfDiag - vesselItem.antX
@@ -147,7 +161,7 @@ Item {
                         source: "../assets/level-02.svg"
                         fillMode: vesselItem.hasDimensions ? Image.Stretch : Image.PreserveAspectFit
                         smooth: true
-                        visible: vesselItem.highZoom
+                        visible: vesselItem.showShape
                         transform: Rotation {
                             angle:    vesselItem.displayHeading
                             origin.x: vesselItem.antX
@@ -155,9 +169,9 @@ Item {
                         }
                     }
 
-                    // ── Vessel label (high zoom only) ─────────────────────────
+                    // ── Label (zoom ≥ 14) ─────────────────────────────────────
                     Rectangle {
-                        visible: vesselItem.highZoom
+                        visible: vesselItem.showLabel
                         x: vesselItem.halfDiag - width / 2
                         y: vesselItem.halfDiag + 20
                         color: "#CC0d1117"
@@ -214,10 +228,9 @@ Item {
             }
 
             Text {
-                text: map.zoomLevel >= 14
-                    ? "▶ Ship silhouette mode"
-                    : "▶ Icon mode  (zoom > 14)"
-                color: map.zoomLevel >= 14 ? "#2ecc71" : "#888"
+                text: map.zoomLevel >= 11 ? "▶ Ship shape mode"
+                                          : "▶ Icon mode"
+                color: map.zoomLevel >= 11 ? "#2ecc71" : "#888"
                 font.pixelSize: 10
                 font.family: "monospace"
             }
