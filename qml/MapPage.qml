@@ -82,11 +82,12 @@ Item {
                 coordinate: QtPositioning.coordinate(lat, lon)
 
                 // ── Zoom zones ───────────────────────────────────────────────
-                //   < 11  → pin icon only
-                //   ≥ 11  → ship silhouette, grows continuously with zoom
-                //   ≥ 14  → label also visible
-                readonly property bool showShape: map.zoomLevel >= 11
+                //   always → pin icon (shrinks) + ship shape (grows)
+                //   ≥ 14   → label also visible
                 readonly property bool showLabel: map.zoomLevel >= 14
+
+                // Pin icon shrinks from 48 px at zoom 5 down to 36 px at zoom 14+
+                readonly property real pinSize: Math.max(48 - (map.zoomLevel - 5) * 1.5, 36)
 
                 // ── Continuous size: zoom-level formula ──────────────────────
                 // Avoids dependence on map.metersPerPixel (unreliable during
@@ -120,38 +121,37 @@ Item {
                     ? pxLength * (a / Math.max(shipLength, 1))
                     : pxLength / 2
 
-                // sourceItem is a square large enough for any rotation
+                // sourceItem square: big enough for ship rotation AND pin icon
                 readonly property real halfDiag: Math.ceil(
-                    Math.sqrt(pxLength * pxLength + pxWidth * pxWidth))
+                    Math.max(Math.sqrt(pxLength * pxLength + pxWidth * pxWidth),
+                             pinSize / 2 + 2))
+
+                // ── Visual centre of the ship hull after rotation ─────────────
+                // The ship image midpoint in local coords: (pxWidth/2, pxLength/2)
+                // Offset from antenna (the rotation pivot at halfDiag,halfDiag):
+                readonly property real midOffX: pxWidth  / 2 - antX
+                readonly property real midOffY: pxLength / 2 - antY
+                readonly property real headingRad: displayHeading * Math.PI / 180
+                // Rotate that offset by heading → gives where midship lands in sourceItem
+                readonly property real shipCenterX: halfDiag
+                    + midOffX * Math.cos(headingRad) - midOffY * Math.sin(headingRad)
+                readonly property real shipCenterY: halfDiag
+                    + midOffX * Math.sin(headingRad) + midOffY * Math.cos(headingRad)
 
                 // anchorPoint = centre of sourceItem = antenna GPS position
                 anchorPoint {
-                    x: showShape ? halfDiag : 57 / 2
-                    y: showShape ? halfDiag : 57 / 2
+                    x: halfDiag
+                    y: halfDiag
                 }
 
                 sourceItem: Item {
-                    width:  vesselItem.showShape ? vesselItem.halfDiag * 2 : 57
-                    height: vesselItem.showShape ? vesselItem.halfDiag * 2 : 57
+                    width:  vesselItem.halfDiag * 2
+                    height: vesselItem.halfDiag * 2
 
-                    // ── Pin icon (low zoom) ───────────────────────────────────
-                    Image {
-                        id: pinIcon
-                        anchors.fill: parent
-                        source: "../assets/Map_pin.svg"
-                        fillMode: Image.PreserveAspectFit
-                        smooth: true
-                        visible: !vesselItem.showShape
-                        rotation: vesselItem.displayHeading
-                        Behavior on rotation {
-                            RotationAnimation { duration: 300; direction: RotationAnimation.Shortest }
-                        }
-                    }
-
-                    // ── Ship silhouette (zoom ≥ 11) ───────────────────────────
+                    // ── Ship silhouette (always rendered, grows with zoom) ─────
                     // Offset so the antenna (antX, antY) lands at the centre of
                     // the sourceItem. Rotation pivots around that same point,
-                    // keeping the GPS dot locked on the coordinate.
+                    // keeping the pin locked on the coordinate.
                     Image {
                         id: shipShape
                         x: vesselItem.halfDiag - vesselItem.antX
@@ -161,11 +161,28 @@ Item {
                         source: "../assets/level-02.svg"
                         fillMode: vesselItem.hasDimensions ? Image.Stretch : Image.PreserveAspectFit
                         smooth: true
-                        visible: vesselItem.showShape
                         transform: Rotation {
                             angle:    vesselItem.displayHeading
                             origin.x: vesselItem.antX
                             origin.y: vesselItem.antY
+                        }
+                    }
+
+                    // ── Pin icon (always rendered, shrinks with zoom) ──────────
+                    // Centred on the ship hull's geometric midpoint; rotates with heading.
+                    Image {
+                        id: pinIcon
+                        x: vesselItem.shipCenterX - vesselItem.pinSize / 2
+                        y: vesselItem.shipCenterY - vesselItem.pinSize / 2
+                        width:  vesselItem.pinSize
+                        height: vesselItem.pinSize
+                        source: "../assets/Map_pin.svg"
+                        fillMode: Image.PreserveAspectFit
+                        smooth: true
+                        z: 1
+                        rotation: vesselItem.displayHeading + 45
+                        Behavior on rotation {
+                            RotationAnimation { duration: 300; direction: RotationAnimation.Shortest }
                         }
                     }
 
@@ -228,7 +245,8 @@ Item {
             }
 
             Text {
-                text: map.zoomLevel >= 11 ? "▶ Ship shape mode"
+                text: map.zoomLevel >= 14 ? "▶ Detail mode"
+                    : map.zoomLevel >= 11 ? "▶ Shape mode"
                                           : "▶ Icon mode"
                 color: map.zoomLevel >= 11 ? "#2ecc71" : "#888"
                 font.pixelSize: 10
