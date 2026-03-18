@@ -6,10 +6,10 @@
 #include "networking/BaseApi.h"
 #include "entities/Vessel.h"
 
-// ─── VesselApi ────────────────────────────────────────────────────────────────
+// VesselApi
 // Fetches vessels from the simulator in two steps:
-//   1. POST /simulation           → obtain a simulationId
-//   2. GET  /simulation/:id/vessels → fetch the AIS vessel array
+//   1. POST /simulation - obtain a simulationId
+//   2. GET  /simulation/:id/vessels - fetch the AIS vessel array
 // Returns the parsed Vessel list via callback.
 
 class VesselApi : public BaseApi

@@ -8,14 +8,11 @@ ApplicationWindow {
     width:   1280
     height:  800
     visible: true
-    title:   "MOC Ship Rendering Enhancement"
-
-    color: "#0d1117"
+    title: qsTr("MOC Ship Rendering Enhancement")
 
     MapPage {
         anchors.fill: parent
     }
 
-    // Fetch vessels once the window is ready
     Component.onCompleted: VesselModel.fetch()
 }

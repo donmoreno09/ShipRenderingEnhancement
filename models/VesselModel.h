@@ -8,7 +8,7 @@
 
 class VesselApi;
 
-// ─── VesselModel ──────────────────────────────────────────────────────────────
+// VesselModel
 // QML-exposed singleton list model of AIS vessels.
 // Loaded once at startup via fetch(). Read-only from QML.
 //

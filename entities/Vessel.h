@@ -5,15 +5,6 @@
 #include <QJsonObject>
 #include "IPersistable.h"
 
-// ─── Vessel ───────────────────────────────────────────────────────────────────
-// AIS vessel entity. A/B/C/D are GPS-antenna offsets in metres (AIS spec):
-//   A = antenna → Bow      (forward)
-//   B = antenna → Stern    (aft)       → shipLength = A + B
-//   C = antenna → Port     (left)
-//   D = antenna → Starboard (right)    → shipWidth  = C + D
-//
-// displayHeading already has the 511 fallback resolved server-side.
-
 class Vessel : public IPersistable
 {
 public:
@@ -21,7 +12,7 @@ public:
     QString name;
     double  lat             = 0.0;
     double  lon             = 0.0;
-    int     heading         = 0;     // raw AIS heading (511 = unavailable)
+    int     heading         = 0;     // raw AIS heading
     double  cog             = 0.0;   // course over ground (degrees)
     double  displayHeading  = 0.0;   // resolved: cog if heading == 511
     double  speed           = 0.0;   // knots
@@ -74,8 +65,6 @@ public:
         navstat        = obj["navstat"].toInt();
     }
 
-    // Populates from the simulator's AIS object (uppercase field names).
-    // displayHeading is resolved here: falls back to cog when heading == 511.
     void fromAIS(const QJsonObject& ais)
     {
         mmsi    = ais["MMSI"].toInt();

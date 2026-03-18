@@ -5,21 +5,11 @@ import QtPositioning 6.8
 
 import MOC_ShipRenderingEnhancement 1.0
 
-// ─── MapPage ──────────────────────────────────────────────────────────────────
-// Full-screen map showing 5 AIS vessels.
-//
-// Zoom behaviour:
-//   < 14  →  Map_pin.svg  (arrow icon, rotated by displayHeading)
-//   ≥ 14  →  level-02.svg (ship silhouette, scaled by A/B/C/D in metres)
-//
-// The GPS coordinate is the antenna position, which sits at distance B from
-// the stern and D from the starboard side. We compensate the anchor point
-// inside the MapQuickItem so the image is geo-anchored correctly.
+// Full-screen map rendering AIS vessels with geo-anchored ship silhouettes.
 
 Item {
     id: root
 
-    // ── Map ──────────────────────────────────────────────────────────────────
     Map {
         id: map
         anchors.fill: parent
@@ -31,12 +21,12 @@ Item {
             PluginParameter { name: "osm.mapping.custom.host";                  value: "https://tile.openstreetmap.org/" }
         }
 
-        center: QtPositioning.coordinate(44.0, 8.5)   // Ligurian Sea
+        center: QtPositioning.coordinate(44.0, 8.5)
         zoomLevel: 8
         minimumZoomLevel: 5
-        maximumZoomLevel: 18
+        maximumZoomLevel: 24
 
-        // ── Pan & scroll interaction ──────────────────────────────────────────
+        // Scroll wheel zooms the map by 0.5 levels per notch.
         WheelHandler {
             id: wheel
             acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
@@ -48,6 +38,7 @@ Item {
             }
         }
 
+        // Drag pans the map; translation is cumulative so we track the delta manually.
         DragHandler {
             id: drag
             target: null
@@ -59,99 +50,92 @@ Item {
             }
         }
 
-        // ── Vessel delegates ─────────────────────────────────────────────────
+        // One MapQuickItem delegate per vessel row in VesselModel.
         MapItemView {
             model: VesselModel
 
             delegate: MapQuickItem {
                 id: vesselItem
 
+                // GPS latitude of the vessel's antenna — used as the map geo-anchor.
                 required property double lat
+                // GPS longitude of the vessel's antenna — used as the map geo-anchor.
                 required property double lon
+                // Compass heading the bow points (0°=North, clockwise). Falls back to COG when raw heading is 511 (unavailable).
                 required property double displayHeading
+                // Metres from antenna to Bow — determines how far the bow is from the GPS dot.
                 required property int    a
+                // Metres from antenna to Stern — together with A gives shipLength.
                 required property int    b
+                // Metres from antenna to Port (left side) — determines lateral antenna offset.
                 required property int    c
+                // Metres from antenna to Starboard (right side) — together with C gives shipWidth.
                 required property int    d
+                // Total hull length in metres (= A + B), computed in C++.
                 required property int    shipLength
+                // Total hull width in metres (= C + D), computed in C++.
                 required property int    shipWidth
+                // True when A/B/C/D are all non-zero; enables real-world sizing and correct antenna offset.
                 required property bool   hasDimensions
+                // Vessel name broadcast by the AIS transponder (e.g. "SIDER IBIZA").
                 required property string name
+                // Speed over ground in knots — declared for future use.
                 required property double speed
 
+                // Places the geo-anchor at the vessel's antenna GPS position.
                 coordinate: QtPositioning.coordinate(lat, lon)
 
-                // ── Zoom zones ───────────────────────────────────────────────
-                //   always → pin icon (shrinks) + ship shape (grows)
-                //   ≥ 14   → label also visible
-                readonly property bool showLabel: map.zoomLevel >= 14
+                // Show the vessel name label only when zoomed in enough to avoid clutter.
+                readonly property bool showLabel: map.zoomLevel >= 15
 
-                // Pin icon shrinks from 48 px at zoom 5 down to 36 px at zoom 14+
+                // Pin icon pixel size — shrinks from 48 px at zoom 5 to a minimum of 36 px.
                 readonly property real pinSize: Math.max(48 - (map.zoomLevel - 5) * 1.5, 36)
 
-                // ── Continuous size: zoom-level formula ──────────────────────
-                // Avoids dependence on map.metersPerPixel (unreliable during
-                // tile provider changes / map init).
-                //
-                // zoomScale doubles every zoom step — physically accurate since
-                // metersPerPixel also halves every step.
-                // Reference: a 200 m ship ≈ 20 px at zoom 14 (Mediterranean).
-                //
-                // Minimum grows with zoom so ships are always a visible shape.
-                // Maximum clamps bad AIS data (A/B up to 511 in the spec).
+                // Scaling factor that doubles every zoom level, matching how map resolution changes.
+                // Calibrated so a 200 m ship ≈ 20 px at zoom 14. Avoids unreliable map.metersPerPixel.
                 readonly property real zoomScale: Math.pow(2, map.zoomLevel - 14)
 
-                readonly property real rawPxLength: hasDimensions
-                    ? Math.min(shipLength, 500) * zoomScale / 10.0 : 0
-                readonly property real rawPxWidth: hasDimensions
-                    ? Math.min(shipWidth,  80)  * zoomScale / 10.0 : 0
+                // Raw pixel length/width from real-world metres. Capped to guard against bad AIS data (spec max is 511).
+                readonly property real rawPxLength: hasDimensions ? Math.min(shipLength, 500) * zoomScale / 10 : 0
+                readonly property real rawPxWidth:  hasDimensions ? Math.min(shipWidth,  80)  * zoomScale / 10 : 0
 
+                // Minimum size that grows with zoom so ships without dimension data remain visible.
                 readonly property real zf:         Math.max(map.zoomLevel - 10, 0)
                 readonly property real minPxLength: 4 + zf * 2
                 readonly property real minPxWidth:  2 + zf * 0.8
 
+                // Final clamped pixel dimensions used to size the ship image.
                 readonly property real pxLength: Math.min(Math.max(rawPxLength, minPxLength), 300)
                 readonly property real pxWidth:  Math.min(Math.max(rawPxWidth,  minPxWidth),  60)
 
-                // ── Antenna position inside the ship image ────────────────────
-                readonly property real antX: hasDimensions
-                    ? pxWidth  * (c / Math.max(shipWidth,  1))
-                    : pxWidth  / 2
-                readonly property real antY: hasDimensions
-                    ? pxLength * (a / Math.max(shipLength, 1))
-                    : pxLength / 2
+                // Pixel position of the antenna within the ship image (port→star, bow→stern).
+                // Falls back to image center when hasDimensions is false.
+                readonly property real antX: hasDimensions ? pxWidth  * (c / shipWidth) : pxWidth  / 2
+                readonly property real antY: hasDimensions ? pxLength * (a / shipLength) : pxLength / 2
 
-                // sourceItem square: big enough for ship rotation AND pin icon
-                readonly property real halfDiag: Math.ceil(
-                    Math.max(Math.sqrt(pxLength * pxLength + pxWidth * pxWidth),
-                             pinSize / 2 + 2))
+                // Half-diagonal of the ship bounding box — defines the square container that fits
+                // the ship at any rotation. Also ensures room for the pin icon.
+                readonly property real halfDiag: Math.ceil(Math.max(Math.sqrt(pxLength * pxLength + pxWidth * pxWidth), pinSize / 2 + 2))
 
-                // ── Visual centre of the ship hull after rotation ─────────────
-                // The ship image midpoint in local coords: (pxWidth/2, pxLength/2)
-                // Offset from antenna (the rotation pivot at halfDiag,halfDiag):
+                // Vector from the antenna to the ship image's geometric center (unrotated).
                 readonly property real midOffX: pxWidth  / 2 - antX
                 readonly property real midOffY: pxLength / 2 - antY
-                readonly property real headingRad: displayHeading * Math.PI / 180
-                // Rotate that offset by heading → gives where midship lands in sourceItem
-                readonly property real shipCenterX: halfDiag
-                    + midOffX * Math.cos(headingRad) - midOffY * Math.sin(headingRad)
-                readonly property real shipCenterY: halfDiag
-                    + midOffX * Math.sin(headingRad) + midOffY * Math.cos(headingRad)
 
-                // anchorPoint = centre of sourceItem = antenna GPS position
-                anchorPoint {
-                    x: halfDiag
-                    y: halfDiag
-                }
+                // Heading in radians, including the +45° correction for the Figma SVG orientation.
+                readonly property real headingRad: (displayHeading + 45) * Math.PI / 180
+
+                // Screen position of the ship hull's visual center after rotation — where the pin is placed.
+                readonly property real shipCenterX: halfDiag + midOffX * Math.cos(headingRad) - midOffY * Math.sin(headingRad)
+                readonly property real shipCenterY: halfDiag + midOffX * Math.sin(headingRad) + midOffY * Math.cos(headingRad)
+
+                // The center of the sourceItem square maps to the antenna GPS coordinate on screen.
+                anchorPoint { x: halfDiag; y: halfDiag }
 
                 sourceItem: Item {
                     width:  vesselItem.halfDiag * 2
                     height: vesselItem.halfDiag * 2
 
-                    // ── Ship silhouette (always rendered, grows with zoom) ─────
-                    // Offset so the antenna (antX, antY) lands at the centre of
-                    // the sourceItem. Rotation pivots around that same point,
-                    // keeping the pin locked on the coordinate.
+                    // Ship silhouette offset so the antenna pixel lands at the container center, then rotated around that same antenna pixel to stay geo-locked.
                     Image {
                         id: shipShape
                         x: vesselItem.halfDiag - vesselItem.antX
@@ -159,17 +143,30 @@ Item {
                         width:  vesselItem.pxWidth
                         height: vesselItem.pxLength
                         source: "../assets/level-02.svg"
-                        fillMode: vesselItem.hasDimensions ? Image.Stretch : Image.PreserveAspectFit
+                        fillMode: Image.PreserveAspectFit
                         smooth: true
                         transform: Rotation {
-                            angle:    vesselItem.displayHeading
-                            origin.x: vesselItem.antX
+                            angle:    vesselItem.displayHeading + 45   // +45 corrects Figma SVG orientation
+                            origin.x: vesselItem.antX // pivot at antenna, not image center
                             origin.y: vesselItem.antY
                         }
                     }
 
-                    // ── Pin icon (always rendered, shrinks with zoom) ──────────
-                    // Centred on the ship hull's geometric midpoint; rotates with heading.
+                    // Circle background stays centered on the hull midpoint.
+                    Image {
+                        id: pinCircle
+                        x: vesselItem.shipCenterX - vesselItem.pinSize / 2
+                        y: vesselItem.shipCenterY - vesselItem.pinSize / 2
+                        width:  vesselItem.pinSize
+                        height: vesselItem.pinSize
+                        source: "../assets/circle-selection.svg"
+                        fillMode: Image.PreserveAspectFit
+                        smooth: true
+                        rotation: vesselItem.displayHeading + 45
+                        z: 1
+                    }
+
+                    // Arrow icon rotates with heading on top of the circle.
                     Image {
                         id: pinIcon
                         x: vesselItem.shipCenterX - vesselItem.pinSize / 2
@@ -179,14 +176,14 @@ Item {
                         source: "../assets/Map_pin.svg"
                         fillMode: Image.PreserveAspectFit
                         smooth: true
-                        z: 1
+                        z: 2   // renders above the circle
                         rotation: vesselItem.displayHeading + 45
                         Behavior on rotation {
                             RotationAnimation { duration: 300; direction: RotationAnimation.Shortest }
                         }
                     }
 
-                    // ── Label (zoom ≥ 14) ─────────────────────────────────────
+                    // Vessel name label only shown at zoom ≥ 14, anchored below the antenna point.
                     Rectangle {
                         visible: vesselItem.showLabel
                         x: vesselItem.halfDiag - width / 2
@@ -209,7 +206,7 @@ Item {
         }
     }
 
-    // ── HUD overlay ───────────────────────────────────────────────────────────
+    // HUD overlay — top-right panel showing zoom level, mode, and loading/error state.
     Rectangle {
         anchors.top:   parent.top
         anchors.right: parent.right
@@ -255,7 +252,6 @@ Item {
 
             Rectangle { width: 180; height: 1; color: "#333355" }
 
-            // Loading / error state
             Text {
                 visible: VesselModel.loading
                 text: "Loading vessels…"
@@ -276,7 +272,7 @@ Item {
         }
     }
 
-    // ── Zoom controls ─────────────────────────────────────────────────────────
+    // Zoom +/- buttons — bottom-right corner, step by 1 level per click.
     Column {
         anchors.right:  parent.right
         anchors.bottom: parent.bottom
@@ -287,9 +283,7 @@ Item {
             width: 36; height: 36; radius: 6
             color: "#CC0d1117"
             border.color: "#B1BAFF"; border.width: 1
-
             Text { anchors.centerIn: parent; text: "+"; color: "#B1BAFF"; font.pixelSize: 18 }
-
             MouseArea {
                 anchors.fill: parent
                 onClicked: map.zoomLevel = Math.min(map.maximumZoomLevel, map.zoomLevel + 1)
@@ -300,9 +294,7 @@ Item {
             width: 36; height: 36; radius: 6
             color: "#CC0d1117"
             border.color: "#B1BAFF"; border.width: 1
-
             Text { anchors.centerIn: parent; text: "−"; color: "#B1BAFF"; font.pixelSize: 18 }
-
             MouseArea {
                 anchors.fill: parent
                 onClicked: map.zoomLevel = Math.max(map.minimumZoomLevel, map.zoomLevel - 1)
